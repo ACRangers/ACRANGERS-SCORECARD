@@ -26,7 +26,9 @@ function App() {
     limit: 1000,
   })
 
-  const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+  const API_BASE = typeof window !== 'undefined' && window.location.hostname !== 'localhost'
+    ? `${window.location.protocol}//${window.location.host}`
+    : 'http://localhost:3001'
 
   useEffect(() => {
     fetchActivities()
