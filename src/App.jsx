@@ -5,10 +5,20 @@ import Charts from './components/Charts'
 import './App.css'
 
 function App() {
+  function getTodayDate() {
+    return new Date().toISOString().split('T')[0]
+  }
+
+  function getOneWeekAgoDate() {
+    const date = new Date()
+    date.setDate(date.getDate() - 7)
+    return date.toISOString().split('T')[0]
+  }
+
   const [activeView, setActiveView] = useState('dashboard')
   const [activities, setActivities] = useState([])
   const [loading, setLoading] = useState(false)
-  const [fromDate, setFromDate] = useState(getTodayDate())
+  const [fromDate, setFromDate] = useState(getOneWeekAgoDate())
   const [toDate, setToDate] = useState(getTodayDate())
   const [filters, setFilters] = useState({
     type: null,
@@ -16,11 +26,7 @@ function App() {
     limit: 1000,
   })
 
-  function getTodayDate() {
-    return new Date().toISOString().split('T')[0]
-  }
-
-  const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+  const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
   useEffect(() => {
     fetchActivities()
