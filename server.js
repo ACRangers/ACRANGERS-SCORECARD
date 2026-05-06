@@ -5,8 +5,6 @@ import dotenv from 'dotenv'
 
 dotenv.config()
 
-console.log('ENV DEBUG: PGHOST=' + process.env.PGHOST + ' PGPORT=' + process.env.PGPORT)
-
 const app = express()
 app.use(cors())
 app.use(express.json())
