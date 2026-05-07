@@ -103,10 +103,10 @@ app.get('/api/scorecard', async (req, res) => {
   try {
     const { from, to } = req.query
 
-    // Get jobs created in date range
-    let jobsQuery = 'SELECT created_by, COUNT(*) as count FROM activity_log WHERE type = $1 AND created_by IS NOT NULL'
-    const jobsParams = ['creation']
-    let jobsParamCount = 2
+    // Get jobs created in date range (ALL jobs, not just creation type)
+    let jobsQuery = 'SELECT created_by, COUNT(*) as count FROM activity_log WHERE created_by IS NOT NULL'
+    const jobsParams = []
+    let jobsParamCount = 1
 
     if (from) {
       jobsQuery += ` AND occurred_at >= $${jobsParamCount}`
