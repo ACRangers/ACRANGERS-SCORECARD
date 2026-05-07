@@ -144,22 +144,16 @@ const EMPLOYEE_MAP = {
   62870802: 'Kenia Simkins',
 }
 
-// GET /api/scorecard - Query database for scorecard
+// GET /api/scorecard - Employee performance: jobs created + dispatches
 app.get('/api/scorecard', async (req, res) => {
   try {
     const { from, to } = req.query
-
     const fromDate = from || new Date(Date.now() - 7*24*60*60*1000).toISOString().split('T')[0]
     const toDate = to ? (to.includes('T') ? to : `${to}T23:59:59.999Z`) : new Date().toISOString()
 
     // Count jobs created by employee
     const jobsResult = await pool.query(
-      `SELECT created_by_id, COUNT(*) as count
-       FROM jobs
-       WHERE created_by_id IS NOT NULL
-       AND created_at >= $1
-       AND created_at <= $2
-       GROUP BY created_by_id`,
+      `SELECT created_by_id, COUNT(*) as count FROM jobs WHERE created_at >= $1 AND created_at <= $2 GROUP BY created_by_id`,
       [fromDate, toDate]
     )
 
@@ -170,12 +164,7 @@ app.get('/api/scorecard', async (req, res) => {
 
     // Count dispatches by employee
     const dispatchesResult = await pool.query(
-      `SELECT employee_id, COUNT(*) as count
-       FROM dispatches
-       WHERE employee_id IS NOT NULL
-       AND created_at >= $1
-       AND created_at <= $2
-       GROUP BY employee_id`,
+      `SELECT employee_id, COUNT(DISTINCT job_id) as count FROM dispatches WHERE created_at >= $1 AND created_at <= $2 GROUP BY employee_id`,
       [fromDate, toDate]
     )
 
@@ -184,9 +173,8 @@ app.get('/api/scorecard', async (req, res) => {
       dispatchesMade[row.employee_id] = row.count
     })
 
-    // Combine and create scorecard
+    // Build scorecard
     const allEmployees = new Set([...Object.keys(jobsCreated), ...Object.keys(dispatchesMade)])
-
     const scorecard = Array.from(allEmployees).map(empId => {
       const numId = parseInt(empId)
       return {
@@ -204,45 +192,37 @@ app.get('/api/scorecard', async (req, res) => {
       }
     })
   } catch (err) {
-    console.error('Scorecard error:', err)
     res.status(500).json({ error: err.message })
   }
 })
 
-// POST /api/migrate - Create jobs, dispatches, and sync_log tables
+// POST /api/migrate - Create clean database schema
 app.post('/api/migrate', async (req, res) => {
   try {
+    // Jobs table - tracks jobs created
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS jobs (
+      DROP TABLE IF EXISTS dispatches CASCADE;
+      DROP TABLE IF EXISTS jobs CASCADE;
+
+      CREATE TABLE jobs (
         id INTEGER PRIMARY KEY,
-        job_number VARCHAR(50),
         created_by_id INTEGER,
-        created_at TIMESTAMP,
-        customer_name VARCHAR(255),
-        status VARCHAR(50)
+        created_at TIMESTAMP
       )
     `)
 
+    // Dispatches table - tracks technician assignments
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS dispatches (
+      CREATE TABLE dispatches (
         id SERIAL PRIMARY KEY,
         job_id INTEGER,
-        job_number VARCHAR(50),
-        event_type VARCHAR(100),
         employee_id INTEGER,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(job_id, employee_id, event_type)
+        created_at TIMESTAMP,
+        UNIQUE(job_id, employee_id)
       )
     `)
 
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS sync_log (
-        date_range_key TEXT PRIMARY KEY,
-        synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `)
-
-    res.json({ status: 'success', message: 'all tables created successfully' })
+    res.json({ status: 'success', message: 'Database created fresh' })
   } catch (err) {
     console.error('Migration error:', err)
     res.status(500).json({ error: err.message })
