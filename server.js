@@ -249,94 +249,52 @@ app.post('/api/migrate', async (req, res) => {
   }
 })
 
-// POST /api/sync - Sync dispatch data from Job History API for a date range
+// POST /api/sync - Sync jobs created and technician assigned dispatches
 app.post('/api/sync', async (req, res) => {
   try {
     const { from, to } = req.body
     const fromDate = from || new Date(Date.now() - 1*24*60*60*1000).toISOString().split('T')[0]
     const toDate = to || new Date().toISOString().split('T')[0]
 
-    console.log(`Starting sync for date range: ${fromDate} to ${toDate}`)
     const token = await getServiceTitanToken()
-    console.log('Got ServiceTitan token')
 
-    // Get jobs updated in the date range from ServiceTitan API
-    console.log(`Fetching jobs modified between ${fromDate} and ${toDate}`)
+    // 1. Get jobs created in date range
     const jobsRes = await fetch(
-      `${process.env.ST_API_URL}/jpm/v2/tenant/${process.env.ST_TENANT_ID}/jobs?modifiedOnOrAfter=${fromDate}&modifiedOnOrBefore=${toDate}&pageSize=500`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'ST-App-Key': process.env.ST_APP_KEY,
-        }
-      }
+      `${process.env.ST_API_URL}/jpm/v2/tenant/${process.env.ST_TENANT_ID}/jobs?createdOnOrAfter=${fromDate}&createdOnOrBefore=${toDate}&pageSize=500`,
+      { headers: { Authorization: `Bearer ${token}`, 'ST-App-Key': process.env.ST_APP_KEY } }
     )
-
-    if (!jobsRes.ok) {
-      throw new Error(`ServiceTitan API error: ${jobsRes.status}`)
-    }
 
     const jobsData = await jobsRes.json()
     const jobIds = (jobsData.data || []).map(j => j.id)
-    console.log(`Found ${jobIds.length} jobs modified in date range`)
 
+    let jobsCreated = jobIds.length
     let dispatchesStored = 0
-    let eventsFound = 0
-    let apiErrors = 0
 
-    // For each job, fetch history and store Technician Assigned events
+    // 2. For each job, get history and find Technician Assigned events
     for (const jobId of jobIds) {
-      try {
-        const historyRes = await fetch(
-          `${process.env.ST_API_URL}/jpm/v2/tenant/${process.env.ST_TENANT_ID}/jobs/${jobId}/history`,
-          {
-            headers: {
-              Authorization: `Bearer ${token}`,
-              'ST-App-Key': process.env.ST_APP_KEY,
-            }
-          }
-        )
+      const historyRes = await fetch(
+        `${process.env.ST_API_URL}/jpm/v2/tenant/${process.env.ST_TENANT_ID}/jobs/${jobId}/history`,
+        { headers: { Authorization: `Bearer ${token}`, 'ST-App-Key': process.env.ST_APP_KEY } }
+      )
 
-        if (historyRes.ok) {
-          const historyData = await historyRes.json()
-          const events = historyData.data || []
+      const historyData = await historyRes.json()
+      const events = historyData.data || []
 
-          for (const event of events) {
-            if (event.eventType === 'Technician Assigned' && event.employeeId) {
-              eventsFound++
-              try {
-                await pool.query(
-                  `INSERT INTO dispatches (job_id, event_type, employee_id, created_at)
-                   VALUES ($1, $2, $3, $4)
-                   ON CONFLICT (job_id, employee_id, event_type) DO NOTHING`,
-                  [jobId, event.eventType, event.employeeId, event.occurredOn]
-                )
-                dispatchesStored++
-              } catch (err) {
-                console.error(`Error inserting dispatch for job ${jobId}:`, err.message)
-              }
-            }
-          }
-        } else {
-          apiErrors++
-          console.warn(`API error for job ${jobId}: ${historyRes.status}`)
+      for (const event of events) {
+        if (event.eventType === 'Technician Assigned' && event.employeeId) {
+          await pool.query(
+            `INSERT INTO dispatches (job_id, event_type, employee_id, created_at)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (job_id, employee_id, event_type) DO NOTHING`,
+            [jobId, event.eventType, event.employeeId, event.occurredOn]
+          )
+          dispatchesStored++
         }
-      } catch (err) {
-        console.error(`Error fetching history for job ${jobId}:`, err.message)
       }
     }
 
-    console.log(`Sync complete: ${dispatchesStored} dispatches stored, ${eventsFound} events found, ${apiErrors} API errors`)
-    res.json({
-      status: 'success',
-      dispatchesStored,
-      eventsFound,
-      jobsProcessed: jobIds.length,
-      apiErrors,
-      dateRange: { from: fromDate, to: toDate }
-    })
+    res.json({ jobsCreated, dispatchesStored, dateRange: { from: fromDate, to: toDate } })
   } catch (err) {
-    console.error('Sync error:', err)
     res.status(500).json({ error: err.message })
   }
 })
