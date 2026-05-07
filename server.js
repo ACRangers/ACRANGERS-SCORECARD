@@ -21,6 +21,77 @@ pool.on('error', (err) => {
   console.error('Unexpected error on idle client', err)
 })
 
+// Auto-setup database on startup
+async function setupDatabase() {
+  try {
+    console.log('Setting up database...')
+
+    // Drop old tables and create fresh ones
+    await pool.query(`
+      DROP TABLE IF EXISTS dispatches CASCADE;
+      DROP TABLE IF EXISTS jobs CASCADE;
+
+      CREATE TABLE jobs (
+        id INTEGER PRIMARY KEY,
+        created_by_id INTEGER,
+        created_at TIMESTAMP
+      );
+
+      CREATE TABLE dispatches (
+        id SERIAL PRIMARY KEY,
+        job_id INTEGER,
+        employee_id INTEGER,
+        created_at TIMESTAMP,
+        UNIQUE(job_id, employee_id)
+      );
+    `)
+    console.log('✓ Database tables created')
+
+    // Auto-sync last 7 days of data
+    console.log('Syncing data from ServiceTitan...')
+    const token = await getServiceTitanToken()
+    const fromDate = new Date(Date.now() - 7*24*60*60*1000).toISOString().split('T')[0]
+    const toDate = new Date().toISOString().split('T')[0]
+
+    const jobsRes = await fetch(
+      `${process.env.ST_API_URL}/jpm/v2/tenant/${process.env.ST_TENANT_ID}/jobs?createdOnOrAfter=${fromDate}&createdOnOrBefore=${toDate}&pageSize=500`,
+      { headers: { Authorization: `Bearer ${token}`, 'ST-App-Key': process.env.ST_APP_KEY } }
+    )
+
+    const jobsData = await jobsRes.json()
+    const jobIds = (jobsData.data || []).map(j => j.id)
+
+    let dispatchesStored = 0
+    for (const jobId of jobIds) {
+      const historyRes = await fetch(
+        `${process.env.ST_API_URL}/jpm/v2/tenant/${process.env.ST_TENANT_ID}/jobs/${jobId}/history`,
+        { headers: { Authorization: `Bearer ${token}`, 'ST-App-Key': process.env.ST_APP_KEY } }
+      )
+
+      const historyData = await historyRes.json()
+      const events = historyData.data || []
+
+      for (const event of events) {
+        if (event.eventType === 'Technician Assigned' && event.employeeId) {
+          await pool.query(
+            `INSERT INTO dispatches (job_id, employee_id, created_at)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (job_id, employee_id) DO NOTHING`,
+            [jobId, event.employeeId, event.occurredOn]
+          )
+          dispatchesStored++
+        }
+      }
+    }
+
+    console.log(`✓ Synced ${jobIds.length} jobs, stored ${dispatchesStored} dispatches`)
+  } catch (err) {
+    console.error('Database setup error:', err.message)
+  }
+}
+
+setupDatabase()
+
 // ServiceTitan token cache
 let stTokenCache = { token: null, expiresAt: 0 }
 
