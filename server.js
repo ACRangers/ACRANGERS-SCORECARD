@@ -98,14 +98,15 @@ app.post('/api/activity', async (req, res) => {
   }
 })
 
-// GET /api/job-history - Fetch job history events for date range
-app.get('/api/job-history', async (req, res) => {
+// GET /api/scorecard - Employee performance scorecard with job creation and dispatch data
+app.get('/api/scorecard', async (req, res) => {
   try {
     const { from, to } = req.query
 
-    let query = 'SELECT DISTINCT job_id FROM activity_log WHERE 1=1'
-    const params = []
-    let paramCount = 1
+    // Get jobs created in date range
+    let query = 'SELECT id, job_id, job_number, customer_name, created_by, occurred_at FROM activity_log WHERE type = $1'
+    const params = [req.query.type || 'creation']
+    let paramCount = 2
 
     if (from) {
       query += ` AND occurred_at >= $${paramCount}`
@@ -119,27 +120,42 @@ app.get('/api/job-history', async (req, res) => {
       paramCount++
     }
 
-    const jobResult = await pool.query(query, params)
-    const jobIds = jobResult.rows.map(r => r.job_id)
+    query += ' ORDER BY occurred_at DESC'
 
-    const allEvents = []
-    const employeeMap = {}
+    const jobsResult = await pool.query(query, params)
+    const jobs = jobsResult.rows
 
-    for (const jobId of jobIds) {
+    const jobsCreatedByEmployee = {}
+    const dispatchesByEmployee = {}
+    const recentBookings = []
+
+    // Count jobs created per employee
+    jobs.forEach(job => {
+      if (job.created_by) {
+        jobsCreatedByEmployee[job.created_by] = (jobsCreatedByEmployee[job.created_by] || 0) + 1
+        recentBookings.push({
+          employee: job.created_by,
+          jobNumber: job.job_number,
+          customerName: job.customer_name,
+          date: job.occurred_at,
+          type: 'created'
+        })
+      }
+    })
+
+    // Fetch technician assignments from Job History API
+    const uniqueJobIds = [...new Set(jobs.map(j => j.job_id))]
+
+    for (const jobId of uniqueJobIds) {
       try {
         const historyRes = await fetch(`https://hvac-tracker-production.up.railway.app/api/debug/job-history?jobId=${jobId}`)
         if (!historyRes.ok) continue
 
         const events = await historyRes.json()
         if (Array.isArray(events)) {
-          allEvents.push(...events)
           events.forEach(event => {
-            if (event.employeeId) {
-              if (!employeeMap[event.employeeId]) {
-                employeeMap[event.employeeId] = { count: 0, events: [] }
-              }
-              employeeMap[event.employeeId].count++
-              employeeMap[event.employeeId].events.push(event)
+            if (event.eventType === 'Technician Assigned' && event.employeeId) {
+              dispatchesByEmployee[event.employeeId] = (dispatchesByEmployee[event.employeeId] || 0) + 1
             }
           })
         }
@@ -148,13 +164,29 @@ app.get('/api/job-history', async (req, res) => {
       }
     }
 
+    // Combine both data sources into scorecard
+    const allEmployees = new Set([
+      ...Object.keys(jobsCreatedByEmployee),
+      ...Object.keys(dispatchesByEmployee)
+    ])
+
+    const scorecard = Array.from(allEmployees).map(empId => ({
+      employeeId: empId,
+      jobsCreated: jobsCreatedByEmployee[empId] || 0,
+      dispatchesMade: dispatchesByEmployee[empId] || 0,
+    })).sort((a, b) => (b.jobsCreated + b.dispatchesMade) - (a.jobsCreated + a.dispatchesMade))
+
     res.json({
-      events: allEvents,
-      employeeTotals: employeeMap,
-      jobCount: jobIds.length,
+      scorecard,
+      recentBookings: recentBookings.slice(0, 20),
+      summary: {
+        totalJobsCreated: jobs.length,
+        totalDispatches: Object.values(dispatchesByEmployee).reduce((a, b) => a + b, 0),
+        uniqueEmployees: allEmployees.size,
+      }
     })
   } catch (err) {
-    console.error('Job history error:', err)
+    console.error('Scorecard error:', err)
     res.status(500).json({ error: err.message })
   }
 })
