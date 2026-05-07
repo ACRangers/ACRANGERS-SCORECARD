@@ -44,6 +44,7 @@ async function getServiceTitanToken() {
 // Create tables on startup
 async function setupDatabase() {
   try {
+    console.log('Attempting to create tables...')
     await pool.query(`
       CREATE TABLE IF NOT EXISTS jobs (
         id INTEGER PRIMARY KEY,
@@ -62,7 +63,7 @@ async function setupDatabase() {
     `)
     console.log('✓ Tables ready')
   } catch (err) {
-    console.error('Setup error:', err.message)
+    console.error('Setup error:', err.message, err.stack)
   }
 }
 
@@ -131,11 +132,15 @@ app.get('/api/scorecard', async (req, res) => {
     const fromDate = from || new Date(Date.now() - 7*24*60*60*1000).toISOString().split('T')[0]
     const toDate = to || new Date().toISOString().split('T')[0]
 
+    console.log(`Scorecard query: ${fromDate} to ${toDate}`)
+
     // Count jobs created per employee
     const createdRes = await pool.query(
       `SELECT created_by_id, COUNT(*) as count FROM jobs WHERE created_at >= $1 AND created_at <= $2 GROUP BY created_by_id`,
       [fromDate, toDate]
     )
+
+    console.log(`Jobs created rows: ${createdRes.rows.length}`)
 
     const created = {}
     createdRes.rows.forEach(row => {
@@ -147,6 +152,8 @@ app.get('/api/scorecard', async (req, res) => {
       `SELECT employee_id, COUNT(DISTINCT job_id) as count FROM dispatches WHERE created_at >= $1 AND created_at <= $2 GROUP BY employee_id`,
       [fromDate, toDate]
     )
+
+    console.log(`Dispatches rows: ${dispatchesRes.rows.length}`)
 
     const booked = {}
     dispatchesRes.rows.forEach(row => {
@@ -166,7 +173,7 @@ app.get('/api/scorecard', async (req, res) => {
 
     res.json({ scorecard })
   } catch (err) {
-    console.error('Scorecard error:', err.message)
+    console.error('Scorecard error:', err.message, err.stack)
     res.status(500).json({ error: err.message })
   }
 })
