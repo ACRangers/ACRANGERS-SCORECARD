@@ -82,13 +82,13 @@ app.get('/api/activity', async (req, res) => {
 // POST /api/activity (for HVAC tracker to log activities)
 app.post('/api/activity', async (req, res) => {
   try {
-    const { type, job_id, job_number, customer_name, old_stage, new_stage, created_by, modified_by, dispatcher_name, tech_name } = req.body
+    const { type, job_id, job_number, customer_name, old_stage, new_stage, created_by, modified_by, dispatcher_name, tech_name, employee_id } = req.body
 
     const result = await pool.query(
-      `INSERT INTO activity_log (type, job_id, job_number, customer_name, old_stage, new_stage, created_by, modified_by, dispatcher_name, tech_name)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO activity_log (type, job_id, job_number, customer_name, old_stage, new_stage, created_by, modified_by, dispatcher_name, tech_name, employee_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
-      [type, job_id, job_number, customer_name, old_stage, new_stage, created_by, modified_by, dispatcher_name, tech_name]
+      [type, job_id, job_number, customer_name, old_stage, new_stage, created_by, modified_by, dispatcher_name, tech_name, employee_id]
     )
 
     res.status(201).json({ data: result.rows[0] })
@@ -143,26 +143,31 @@ app.get('/api/scorecard', async (req, res) => {
       }
     })
 
-    // Fetch technician assignments from Job History API
-    const uniqueJobIds = [...new Set(jobs.map(j => j.job_id))]
+    // Get dispatch data from activity_log
+    let dispatchQuery = 'SELECT employee_id, COUNT(*) as count FROM activity_log WHERE type = $1'
+    const dispatchParams = ['dispatch']
+    let dispatchParamCount = 2
 
-    for (const jobId of uniqueJobIds) {
-      try {
-        const historyRes = await fetch(`https://hvac-tracker-production.up.railway.app/api/debug/job-history?jobId=${jobId}`)
-        if (!historyRes.ok) continue
-
-        const events = await historyRes.json()
-        if (Array.isArray(events)) {
-          events.forEach(event => {
-            if (event.eventType === 'Technician Assigned' && event.employeeId) {
-              dispatchesByEmployee[event.employeeId] = (dispatchesByEmployee[event.employeeId] || 0) + 1
-            }
-          })
-        }
-      } catch (err) {
-        console.error(`Error fetching job history for job ${jobId}:`, err.message)
-      }
+    if (from) {
+      dispatchQuery += ` AND occurred_at >= $${dispatchParamCount}`
+      dispatchParams.push(new Date(from).toISOString())
+      dispatchParamCount++
     }
+
+    if (to) {
+      dispatchQuery += ` AND occurred_at <= $${dispatchParamCount}`
+      dispatchParams.push(to.includes('T') ? to : `${to}T23:59:59.999Z`)
+      dispatchParamCount++
+    }
+
+    dispatchQuery += ' GROUP BY employee_id'
+
+    const dispatchResult = await pool.query(dispatchQuery, dispatchParams)
+    dispatchResult.rows.forEach(row => {
+      if (row.employee_id) {
+        dispatchesByEmployee[row.employee_id] = row.count
+      }
+    })
 
     // Combine both data sources into scorecard
     const allEmployees = new Set([
@@ -187,6 +192,20 @@ app.get('/api/scorecard', async (req, res) => {
     })
   } catch (err) {
     console.error('Scorecard error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// POST /api/migrate - Add employeeId column if not exists
+app.post('/api/migrate', async (req, res) => {
+  try {
+    await pool.query(`
+      ALTER TABLE activity_log
+      ADD COLUMN IF NOT EXISTS employee_id INTEGER
+    `)
+    res.json({ status: 'success', message: 'employee_id column added to activity_log' })
+  } catch (err) {
+    console.error('Migration error:', err)
     res.status(500).json({ error: err.message })
   }
 })

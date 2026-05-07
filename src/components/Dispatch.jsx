@@ -92,16 +92,18 @@ function Dispatch({ fromDate, toDate }) {
               </tr>
             </thead>
             <tbody>
-              {data.scorecard.map((row) => (
-                <tr key={row.employeeId} className="border-b border-gray-100 dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-700/50">
-                  <td className="py-3 px-3 text-gray-900 dark:text-white font-medium">
-                    {EMPLOYEE_MAP[String(row.employeeId)] || `Employee ${row.employeeId}`}
-                  </td>
-                  <td className="py-3 px-3 text-center text-blue-600 font-semibold">{row.jobsCreated}</td>
-                  <td className="py-3 px-3 text-center text-purple-600 font-semibold">{row.dispatchesMade}</td>
-                  <td className="py-3 px-3 text-center text-orange-600 font-bold">{row.jobsCreated + row.dispatchesMade}</td>
-                </tr>
-              ))}
+              {data.scorecard.map((row) => {
+                const employeeId = String(row.employeeId)
+                const employeeName = EMPLOYEE_MAP[employeeId] || `Employee ${employeeId}`
+                return (
+                  <tr key={row.employeeId} className="border-b border-gray-100 dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-700/50">
+                    <td className="py-3 px-3 text-gray-900 dark:text-white font-medium">{employeeName}</td>
+                    <td className="py-3 px-3 text-center text-blue-600 font-semibold">{row.jobsCreated}</td>
+                    <td className="py-3 px-3 text-center text-purple-600 font-semibold">{row.dispatchesMade}</td>
+                    <td className="py-3 px-3 text-center text-orange-600 font-bold">{row.jobsCreated + row.dispatchesMade}</td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
