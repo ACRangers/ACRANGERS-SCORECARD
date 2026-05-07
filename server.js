@@ -21,6 +21,37 @@ pool.on('error', (err) => {
   console.error('Unexpected error on idle client', err)
 })
 
+// ServiceTitan token cache
+let stTokenCache = { token: null, expiresAt: 0 }
+
+async function getServiceTitanToken() {
+  if (stTokenCache.token && Date.now() < stTokenCache.expiresAt) {
+    return stTokenCache.token
+  }
+
+  try {
+    const params = new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: process.env.ST_CLIENT_ID,
+      client_secret: process.env.ST_CLIENT_SECRET,
+    })
+
+    const res = await fetch(process.env.ST_AUTH_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params
+    })
+
+    const data = await res.json()
+    stTokenCache.token = data.access_token
+    stTokenCache.expiresAt = Date.now() + (data.expires_in * 1000) - 60000
+    return data.access_token
+  } catch (err) {
+    console.error('Failed to get ServiceTitan token:', err)
+    throw err
+  }
+}
+
 // GET /api/activity
 app.get('/api/activity', async (req, res) => {
   try {
@@ -98,70 +129,91 @@ app.post('/api/activity', async (req, res) => {
   }
 })
 
-// GET /api/scorecard - Jobs Created + Dispatches per Employee
+// EMPLOYEE_MAP
+const EMPLOYEE_MAP = {
+  63732950: 'Charlet Butler',
+  78602964: 'Kaila Ferraris',
+  10254: 'Brittany Magdaleno',
+  79202258: 'Michael Molina',
+  62148947: 'Alyssa Power',
+  78143325: 'Chamille Mendros',
+  79166940: 'Alec Sunga',
+  62905893: 'Miranda Hahn',
+  79343306: 'Angel Pacaldo',
+  65908059: 'Tracie Huss',
+  62870802: 'Kenia Simkins',
+}
+
+// GET /api/scorecard - Fetch from ServiceTitan API
 app.get('/api/scorecard', async (req, res) => {
   try {
     const { from, to } = req.query
+    const token = await getServiceTitanToken()
 
-    // Get jobs created in date range (ALL jobs, not just creation type)
-    let jobsQuery = 'SELECT created_by, COUNT(*) as count FROM activity_log WHERE created_by IS NOT NULL'
-    const jobsParams = []
-    let jobsParamCount = 1
+    const fromDate = from || new Date(Date.now() - 7*24*60*60*1000).toISOString().split('T')[0]
+    const toDate = to || new Date().toISOString().split('T')[0]
 
-    if (from) {
-      jobsQuery += ` AND occurred_at >= $${jobsParamCount}`
-      jobsParams.push(new Date(from).toISOString())
-      jobsParamCount++
-    }
+    // Fetch jobs created in date range from ServiceTitan
+    const jobsRes = await fetch(
+      `${process.env.ST_API_URL}/jpm/v2/tenant/${process.env.ST_TENANT_ID}/jobs?createdOnOrAfter=${fromDate}&createdOnOrBefore=${toDate}&pageSize=500`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'ST-App-Key': process.env.ST_APP_KEY,
+        }
+      }
+    )
 
-    if (to) {
-      jobsQuery += ` AND occurred_at <= $${jobsParamCount}`
-      jobsParams.push(to.includes('T') ? to : `${to}T23:59:59.999Z`)
-      jobsParamCount++
-    }
+    if (!jobsRes.ok) throw new Error(`ServiceTitan API error: ${jobsRes.status}`)
 
-    jobsQuery += ' GROUP BY created_by'
+    const jobsData = await jobsRes.json()
+    const jobs = jobsData.data || []
 
-    const jobsResult = await pool.query(jobsQuery, jobsParams)
     const jobsCreated = {}
-    jobsResult.rows.forEach(row => {
-      jobsCreated[row.created_by] = row.count
-    })
-
-    // Get dispatches from dispatches table
-    let dispatchQuery = 'SELECT employee_id, COUNT(*) as count FROM dispatches WHERE 1=1'
-    const dispatchParams = []
-    let dispatchParamCount = 1
-
-    if (from) {
-      dispatchQuery += ` AND created_at >= $${dispatchParamCount}`
-      dispatchParams.push(new Date(from).toISOString())
-      dispatchParamCount++
-    }
-
-    if (to) {
-      dispatchQuery += ` AND created_at <= $${dispatchParamCount}`
-      dispatchParams.push(to.includes('T') ? to : `${to}T23:59:59.999Z`)
-      dispatchParamCount++
-    }
-
-    dispatchQuery += ' GROUP BY employee_id'
-
-    const dispatchResult = await pool.query(dispatchQuery, dispatchParams)
     const dispatchesMade = {}
-    dispatchResult.rows.forEach(row => {
-      dispatchesMade[row.employee_id] = row.count
-    })
 
-    // Combine all employees
+    // Process each job
+    for (const job of jobs) {
+      // Count job created by employee
+      if (job.createdById) {
+        jobsCreated[job.createdById] = (jobsCreated[job.createdById] || 0) + 1
+      }
+
+      // Get job history for technician assignments
+      try {
+        const historyRes = await fetch(
+          `${process.env.ST_API_URL}/jpm/v2/tenant/${process.env.ST_TENANT_ID}/jobs/${job.id}/history`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'ST-App-Key': process.env.ST_APP_KEY,
+            }
+          }
+        )
+
+        if (historyRes.ok) {
+          const historyData = await historyRes.json()
+          const events = historyData.data || []
+
+          // Find Technician Assigned events
+          events.forEach(event => {
+            if (event.eventType === 'Technician Assigned' && event.employeeId) {
+              dispatchesMade[event.employeeId] = (dispatchesMade[event.employeeId] || 0) + 1
+            }
+          })
+        }
+      } catch (err) {
+        console.error(`Error fetching history for job ${job.id}:`, err.message)
+      }
+    }
+
+    // Combine and create scorecard
     const allEmployees = new Set([...Object.keys(jobsCreated), ...Object.keys(dispatchesMade)])
 
     const scorecard = Array.from(allEmployees).map(empId => {
-      const isNumeric = !isNaN(empId)
-      const id = isNumeric ? parseInt(empId) : empId
+      const numId = parseInt(empId)
       return {
-        employeeId: id,
-        employeeName: empId,
+        employeeId: numId,
         jobsCreated: jobsCreated[empId] || 0,
         dispatchesMade: dispatchesMade[empId] || 0,
       }
@@ -172,6 +224,7 @@ app.get('/api/scorecard', async (req, res) => {
       summary: {
         totalJobsCreated: Object.values(jobsCreated).reduce((a, b) => a + b, 0),
         totalDispatches: Object.values(dispatchesMade).reduce((a, b) => a + b, 0),
+        jobsProcessed: jobs.length,
       }
     })
   } catch (err) {
