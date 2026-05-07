@@ -31,17 +31,14 @@ function Dispatch({ fromDate, toDate }) {
     setLoading(true)
     setError(null)
     try {
-      const params = new URLSearchParams({
-        from: fromDate,
-        to: toDate + 'T23:59:59.999Z',
-      })
-
-      const response = await fetch(`${API_BASE}/api/scorecard?${params}`)
+      const response = await fetch(
+        `${API_BASE}/api/scorecard?from=${fromDate}&to=${toDate}`
+      )
       if (!response.ok) throw new Error('Failed to fetch scorecard')
       const result = await response.json()
       setData(result)
     } catch (err) {
-      console.error('Error fetching scorecard:', err)
+      console.error('Error:', err)
       setError(err.message)
     } finally {
       setLoading(false)
@@ -49,7 +46,7 @@ function Dispatch({ fromDate, toDate }) {
   }
 
   if (loading) {
-    return <div className="card text-center py-8"><p className="text-gray-600 dark:text-gray-400">Loading scorecard...</p></div>
+    return <div className="card text-center py-8"><p className="text-gray-600 dark:text-gray-400">Loading...</p></div>
   }
 
   if (error) {
@@ -57,24 +54,11 @@ function Dispatch({ fromDate, toDate }) {
   }
 
   if (!data || !data.scorecard) {
-    return <div className="card text-center py-8"><p className="text-gray-600 dark:text-gray-400">No data available</p></div>
+    return <div className="card text-center py-8"><p className="text-gray-600 dark:text-gray-400">No data</p></div>
   }
 
   return (
     <div className="space-y-6">
-      {/* Summary */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="card">
-          <div className="text-3xl font-bold text-blue-600">{data.summary.totalJobsCreated}</div>
-          <div className="text-sm text-gray-600 dark:text-gray-400">Total Jobs Created</div>
-        </div>
-        <div className="card">
-          <div className="text-3xl font-bold text-purple-600">{data.summary.totalDispatches}</div>
-          <div className="text-sm text-gray-600 dark:text-gray-400">Total Dispatches</div>
-        </div>
-      </div>
-
-      {/* Scorecard */}
       <div className="card">
         <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">Employee Scorecard</h2>
         <div className="overflow-x-auto">
@@ -82,9 +66,8 @@ function Dispatch({ fromDate, toDate }) {
             <thead>
               <tr className="border-b border-gray-200 dark:border-slate-600">
                 <th className="text-left py-2 px-3 font-semibold text-gray-700 dark:text-gray-300">Employee</th>
-                <th className="text-center py-2 px-3 font-semibold text-gray-700 dark:text-gray-300">Jobs Created</th>
-                <th className="text-center py-2 px-3 font-semibold text-gray-700 dark:text-gray-300">Dispatches</th>
-                <th className="text-center py-2 px-3 font-semibold text-gray-700 dark:text-gray-300">Total</th>
+                <th className="text-center py-2 px-3 font-semibold text-gray-700 dark:text-gray-300">Created</th>
+                <th className="text-center py-2 px-3 font-semibold text-gray-700 dark:text-gray-300">Booked</th>
               </tr>
             </thead>
             <tbody>
@@ -93,9 +76,8 @@ function Dispatch({ fromDate, toDate }) {
                   <td className="py-3 px-3 text-gray-900 dark:text-white font-medium">
                     {EMPLOYEE_MAP[row.employeeId] || `Employee ${row.employeeId}`}
                   </td>
-                  <td className="py-3 px-3 text-center text-blue-600 font-semibold">{row.jobsCreated}</td>
-                  <td className="py-3 px-3 text-center text-purple-600 font-semibold">{row.dispatchesMade}</td>
-                  <td className="py-3 px-3 text-center text-orange-600 font-bold">{row.jobsCreated + row.dispatchesMade}</td>
+                  <td className="py-3 px-3 text-center text-blue-600 font-semibold">{row.created}</td>
+                  <td className="py-3 px-3 text-center text-purple-600 font-semibold">{row.booked}</td>
                 </tr>
               ))}
             </tbody>
