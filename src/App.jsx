@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import Dashboard from './components/Dashboard'
 import Timeline from './components/Timeline'
 import Charts from './components/Charts'
+import Dispatch from './components/Dispatch'
 import './App.css'
 
 function App() {
@@ -86,6 +87,16 @@ function App() {
               Timeline
             </button>
             <button
+              onClick={() => setActiveView('dispatch')}
+              className={`px-4 py-2 rounded-lg transition ${
+                activeView === 'dispatch'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-200 dark:bg-slate-700 text-gray-900 dark:text-white hover:bg-gray-300 dark:hover:bg-slate-600'
+              }`}
+            >
+              Dispatch
+            </button>
+            <button
               onClick={() => setActiveView('charts')}
               className={`px-4 py-2 rounded-lg transition ${
                 activeView === 'charts'
@@ -166,6 +177,10 @@ function App() {
 
         {!loading && activeView === 'timeline' && (
           <Timeline activities={activities} />
+        )}
+
+        {!loading && activeView === 'dispatch' && (
+          <Dispatch fromDate={fromDate} toDate={toDate} />
         )}
 
         {!loading && activeView === 'charts' && (

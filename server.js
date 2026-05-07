@@ -98,6 +98,67 @@ app.post('/api/activity', async (req, res) => {
   }
 })
 
+// GET /api/job-history - Fetch job history events for date range
+app.get('/api/job-history', async (req, res) => {
+  try {
+    const { from, to } = req.query
+
+    let query = 'SELECT DISTINCT job_id FROM activity_log WHERE 1=1'
+    const params = []
+    let paramCount = 1
+
+    if (from) {
+      query += ` AND occurred_at >= $${paramCount}`
+      params.push(new Date(from).toISOString())
+      paramCount++
+    }
+
+    if (to) {
+      query += ` AND occurred_at <= $${paramCount}`
+      params.push(to.includes('T') ? to : `${to}T23:59:59.999Z`)
+      paramCount++
+    }
+
+    const jobResult = await pool.query(query, params)
+    const jobIds = jobResult.rows.map(r => r.job_id)
+
+    const allEvents = []
+    const employeeMap = {}
+
+    for (const jobId of jobIds) {
+      try {
+        const historyRes = await fetch(`https://hvac-tracker-production.up.railway.app/api/debug/job-history?jobId=${jobId}`)
+        if (!historyRes.ok) continue
+
+        const events = await historyRes.json()
+        if (Array.isArray(events)) {
+          allEvents.push(...events)
+          events.forEach(event => {
+            if (event.employeeId) {
+              if (!employeeMap[event.employeeId]) {
+                employeeMap[event.employeeId] = { count: 0, events: [] }
+              }
+              employeeMap[event.employeeId].count++
+              employeeMap[event.employeeId].events.push(event)
+            }
+          })
+        }
+      } catch (err) {
+        console.error(`Error fetching job history for job ${jobId}:`, err.message)
+      }
+    }
+
+    res.json({
+      events: allEvents,
+      employeeTotals: employeeMap,
+      jobCount: jobIds.length,
+    })
+  } catch (err) {
+    console.error('Job history error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' })
