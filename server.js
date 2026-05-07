@@ -9,6 +9,9 @@ const app = express()
 app.use(cors())
 app.use(express.json())
 
+// Serve built React app
+app.use(express.static('dist'))
+
 const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
@@ -100,8 +103,12 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' })
 })
 
+// Serve React app for all other routes
+app.get('*', (req, res) => {
+  res.sendFile(process.cwd() + '/dist/index.html')
+})
+
 const PORT = process.env.PORT || 3001
 app.listen(PORT, () => {
-  console.log(`Activity App API running on http://localhost:${PORT}`)
-  console.log(`Database: ${process.env.PGHOST}:${process.env.PGPORT}/${process.env.PGDATABASE}`)
+  console.log(`Activity App running on port ${PORT}`)
 })
