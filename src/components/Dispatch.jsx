@@ -56,48 +56,52 @@ function Dispatch({ fromDate, toDate }) {
     return <div className="card bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 p-4">{error}</div>
   }
 
-  if (!data) {
+  if (!data || !data.scorecard) {
     return <div className="card text-center py-8"><p className="text-gray-600 dark:text-gray-400">No data available</p></div>
   }
 
   return (
     <div className="space-y-6">
       {/* Summary */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="card">
-          <div className="text-3xl font-bold text-blue-600">{data.summary.totalDispatches}</div>
+          <div className="text-3xl font-bold text-blue-600">{data.summary.totalJobsCreated}</div>
+          <div className="text-sm text-gray-600 dark:text-gray-400">Total Jobs Created</div>
+        </div>
+        <div className="card">
+          <div className="text-3xl font-bold text-purple-600">{data.summary.totalDispatches}</div>
           <div className="text-sm text-gray-600 dark:text-gray-400">Total Dispatches</div>
-        </div>
-        <div className="card">
-          <div className="text-3xl font-bold text-purple-600">{data.summary.uniqueEmployees}</div>
-          <div className="text-sm text-gray-600 dark:text-gray-400">Technicians</div>
-        </div>
-        <div className="card">
-          <div className="text-3xl font-bold text-orange-600">{data.summary.jobsChecked}</div>
-          <div className="text-sm text-gray-600 dark:text-gray-400">Jobs Checked</div>
         </div>
       </div>
 
-      {/* Scorecard Table */}
+      {/* Scorecard */}
       <div className="card">
-        <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">Dispatch Scorecard</h2>
+        <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">Employee Scorecard</h2>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-200 dark:border-slate-600">
                 <th className="text-left py-2 px-3 font-semibold text-gray-700 dark:text-gray-300">Employee</th>
-                <th className="text-center py-2 px-3 font-semibold text-gray-700 dark:text-gray-300"># of Dispatches</th>
+                <th className="text-center py-2 px-3 font-semibold text-gray-700 dark:text-gray-300">Jobs Created</th>
+                <th className="text-center py-2 px-3 font-semibold text-gray-700 dark:text-gray-300">Dispatches</th>
+                <th className="text-center py-2 px-3 font-semibold text-gray-700 dark:text-gray-300">Total</th>
               </tr>
             </thead>
             <tbody>
-              {data.scorecard.map((row) => (
-                <tr key={row.employeeId} className="border-b border-gray-100 dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-700/50">
-                  <td className="py-3 px-3 text-gray-900 dark:text-white font-medium">
-                    {EMPLOYEE_MAP[row.employeeId] || `Employee ${row.employeeId}`}
-                  </td>
-                  <td className="py-3 px-3 text-center text-blue-600 font-semibold">{row.dispatchesMade}</td>
-                </tr>
-              ))}
+              {data.scorecard.map((row) => {
+                const displayName = typeof row.employeeId === 'number'
+                  ? (EMPLOYEE_MAP[row.employeeId] || `Employee ${row.employeeId}`)
+                  : (EMPLOYEE_MAP[parseInt(row.employeeId)] || row.employeeName || `Employee ${row.employeeId}`)
+
+                return (
+                  <tr key={row.employeeId} className="border-b border-gray-100 dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-700/50">
+                    <td className="py-3 px-3 text-gray-900 dark:text-white font-medium">{displayName}</td>
+                    <td className="py-3 px-3 text-center text-blue-600 font-semibold">{row.jobsCreated}</td>
+                    <td className="py-3 px-3 text-center text-purple-600 font-semibold">{row.dispatchesMade}</td>
+                    <td className="py-3 px-3 text-center text-orange-600 font-bold">{row.jobsCreated + row.dispatchesMade}</td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
