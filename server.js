@@ -144,91 +144,13 @@ const EMPLOYEE_MAP = {
   62870802: 'Kenia Simkins',
 }
 
-// GET /api/scorecard - Auto-sync if stale, then query database for scorecard
+// GET /api/scorecard - Query database for scorecard
 app.get('/api/scorecard', async (req, res) => {
   try {
     const { from, to } = req.query
 
     const fromDate = from || new Date(Date.now() - 7*24*60*60*1000).toISOString().split('T')[0]
     const toDate = to ? (to.includes('T') ? to : `${to}T23:59:59.999Z`) : new Date().toISOString()
-
-    // Check if this date range needs syncing (cache TTL = 3 minutes)
-    const cacheKey = `${fromDate}_${toDate.split('T')[0]}`
-    const syncCheckResult = await pool.query(
-      'SELECT synced_at FROM sync_log WHERE date_range_key = $1',
-      [cacheKey]
-    )
-
-    const now = new Date()
-    const needsSync = !syncCheckResult.rows.length ||
-                      (now - new Date(syncCheckResult.rows[0].synced_at)) > 3 * 60 * 1000
-
-    // Auto-sync if stale or never synced
-    if (needsSync) {
-      try {
-        const token = await getServiceTitanToken()
-        const jobsRes = await fetch(
-          `${process.env.ST_API_URL}/jpm/v2/tenant/${process.env.ST_TENANT_ID}/jobs?createdOnOrAfter=${fromDate}&createdOnOrBefore=${toDate.split('T')[0]}&pageSize=500`,
-          {
-            headers: {
-              Authorization: `Bearer ${token}`,
-              'ST-App-Key': process.env.ST_APP_KEY,
-            }
-          }
-        )
-
-        if (jobsRes.ok) {
-          const jobsData = await jobsRes.json()
-          const jobs = jobsData.data || []
-
-          for (const job of jobs) {
-            await pool.query(
-              `INSERT INTO jobs (id, job_number, created_by_id, created_at, customer_name, status)
-               VALUES ($1, $2, $3, $4, $5, $6)
-               ON CONFLICT (id) DO UPDATE SET
-                 job_number = $2, created_by_id = $3, created_at = $4, customer_name = $5, status = $6`,
-              [job.id, job.number, job.createdById, job.createdOn, job.customerName, job.status]
-            )
-
-            const historyRes = await fetch(
-              `${process.env.ST_API_URL}/jpm/v2/tenant/${process.env.ST_TENANT_ID}/jobs/${job.id}/history`,
-              {
-                headers: {
-                  Authorization: `Bearer ${token}`,
-                  'ST-App-Key': process.env.ST_APP_KEY,
-                }
-              }
-            )
-
-            if (historyRes.ok) {
-              const historyData = await historyRes.json()
-              const events = historyData.data || []
-
-              for (const event of events) {
-                if (event.eventType === 'Technician Assigned' && event.employeeId) {
-                  await pool.query(
-                    `INSERT INTO dispatches (job_id, job_number, event_type, employee_id, created_at)
-                     VALUES ($1, $2, $3, $4, $5)
-                     ON CONFLICT DO NOTHING`,
-                    [job.id, job.number, event.eventType, event.employeeId, event.occurredOn]
-                  )
-                }
-              }
-            }
-          }
-
-          // Update sync log
-          await pool.query(
-            `INSERT INTO sync_log (date_range_key, synced_at) VALUES ($1, $2)
-             ON CONFLICT (date_range_key) DO UPDATE SET synced_at = $2`,
-            [cacheKey, new Date()]
-          )
-        }
-      } catch (err) {
-        console.error('Auto-sync error:', err.message)
-        // Continue with query even if sync fails
-      }
-    }
 
     // Count jobs created by employee
     const jobsResult = await pool.query(
