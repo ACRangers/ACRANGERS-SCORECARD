@@ -33,6 +33,14 @@ function App() {
     fetchScorecard()
   }, [fromDate, toDate])
 
+  // Auto-refresh every 60 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchScorecard()
+    }, 60000)
+    return () => clearInterval(interval)
+  }, [fromDate, toDate])
+
   async function fetchScorecard() {
     setLoading(true)
     try {

@@ -73,7 +73,7 @@ setupDatabase()
 app.post('/api/sync', async (req, res) => {
   try {
     const { from, to } = req.body
-    const fromDate = from || new Date(Date.now() - 7*24*60*60*1000).toISOString().split('T')[0]
+    const fromDate = from || new Date(Date.now() - 90*24*60*60*1000).toISOString().split('T')[0]
     const toDate = to || new Date().toISOString().split('T')[0]
 
     console.log(`Syncing jobs from ${fromDate} to ${toDate}`)
