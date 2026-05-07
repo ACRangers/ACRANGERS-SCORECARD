@@ -98,15 +98,15 @@ app.post('/api/activity', async (req, res) => {
   }
 })
 
-// GET /api/scorecard - Employee performance scorecard with job creation and dispatch data
+// GET /api/scorecard - Dispatch scorecard from Job History API
 app.get('/api/scorecard', async (req, res) => {
   try {
     const { from, to } = req.query
 
-    // Get jobs created in date range
-    let query = 'SELECT id, job_id, job_number, customer_name, created_by, occurred_at FROM activity_log WHERE type = $1'
-    const params = [req.query.type || 'creation']
-    let paramCount = 2
+    // Get unique job IDs from activity_log
+    let query = 'SELECT DISTINCT job_id FROM activity_log WHERE job_id IS NOT NULL'
+    const params = []
+    let paramCount = 1
 
     if (from) {
       query += ` AND occurred_at >= $${paramCount}`
@@ -120,74 +120,45 @@ app.get('/api/scorecard', async (req, res) => {
       paramCount++
     }
 
-    query += ' ORDER BY occurred_at DESC'
+    const jobResult = await pool.query(query, params)
+    const jobIds = jobResult.rows.map(r => r.job_id)
 
-    const jobsResult = await pool.query(query, params)
-    const jobs = jobsResult.rows
-
-    const jobsCreatedByEmployee = {}
     const dispatchesByEmployee = {}
-    const recentBookings = []
 
-    // Count jobs created per employee
-    jobs.forEach(job => {
-      if (job.created_by) {
-        jobsCreatedByEmployee[job.created_by] = (jobsCreatedByEmployee[job.created_by] || 0) + 1
-        recentBookings.push({
-          employee: job.created_by,
-          jobNumber: job.job_number,
-          customerName: job.customer_name,
-          date: job.occurred_at,
-          type: 'created'
-        })
+    // Fetch Job History API for each job and count "Technician Assigned" events
+    for (const jobId of jobIds) {
+      try {
+        const historyRes = await fetch(`https://hvac-tracker-production.up.railway.app/api/debug/job-history?jobId=${jobId}`)
+        if (!historyRes.ok) continue
+
+        const events = await historyRes.json()
+        if (Array.isArray(events)) {
+          events.forEach(event => {
+            if (event.eventType === 'Technician Assigned' && event.employeeId) {
+              const empId = event.employeeId
+              dispatchesByEmployee[empId] = (dispatchesByEmployee[empId] || 0) + 1
+            }
+          })
+        }
+      } catch (err) {
+        console.error(`Error fetching job history for job ${jobId}:`, err.message)
       }
-    })
-
-    // Get dispatch data from activity_log
-    let dispatchQuery = 'SELECT employee_id, COUNT(*) as count FROM activity_log WHERE type = $1'
-    const dispatchParams = ['dispatch']
-    let dispatchParamCount = 2
-
-    if (from) {
-      dispatchQuery += ` AND occurred_at >= $${dispatchParamCount}`
-      dispatchParams.push(new Date(from).toISOString())
-      dispatchParamCount++
     }
 
-    if (to) {
-      dispatchQuery += ` AND occurred_at <= $${dispatchParamCount}`
-      dispatchParams.push(to.includes('T') ? to : `${to}T23:59:59.999Z`)
-      dispatchParamCount++
-    }
-
-    dispatchQuery += ' GROUP BY employee_id'
-
-    const dispatchResult = await pool.query(dispatchQuery, dispatchParams)
-    dispatchResult.rows.forEach(row => {
-      if (row.employee_id) {
-        dispatchesByEmployee[row.employee_id] = row.count
-      }
-    })
-
-    // Combine both data sources into scorecard
-    const allEmployees = new Set([
-      ...Object.keys(jobsCreatedByEmployee),
-      ...Object.keys(dispatchesByEmployee)
-    ])
-
-    const scorecard = Array.from(allEmployees).map(empId => ({
-      employeeId: empId,
-      jobsCreated: jobsCreatedByEmployee[empId] || 0,
-      dispatchesMade: dispatchesByEmployee[empId] || 0,
-    })).sort((a, b) => (b.jobsCreated + b.dispatchesMade) - (a.jobsCreated + a.dispatchesMade))
+    // Convert to scorecard format
+    const scorecard = Object.entries(dispatchesByEmployee)
+      .map(([employeeId, count]) => ({
+        employeeId: parseInt(employeeId),
+        dispatchesMade: count
+      }))
+      .sort((a, b) => b.dispatchesMade - a.dispatchesMade)
 
     res.json({
       scorecard,
-      recentBookings: recentBookings.slice(0, 20),
       summary: {
-        totalJobsCreated: jobs.length,
         totalDispatches: Object.values(dispatchesByEmployee).reduce((a, b) => a + b, 0),
-        uniqueEmployees: allEmployees.size,
+        uniqueEmployees: Object.keys(dispatchesByEmployee).length,
+        jobsChecked: jobIds.length
       }
     })
   } catch (err) {
