@@ -249,17 +249,36 @@ app.post('/api/migrate', async (req, res) => {
   }
 })
 
-// POST /api/sync - Sync dispatch data from Job History API to database
+// POST /api/sync - Sync dispatch data from Job History API for a date range
 app.post('/api/sync', async (req, res) => {
   try {
-    console.log('Starting sync...')
+    const { from, to } = req.body
+    const fromDate = from || new Date(Date.now() - 1*24*60*60*1000).toISOString().split('T')[0]
+    const toDate = to || new Date().toISOString().split('T')[0]
+
+    console.log(`Starting sync for date range: ${fromDate} to ${toDate}`)
     const token = await getServiceTitanToken()
     console.log('Got ServiceTitan token')
 
-    // Get all job IDs from the jobs table
-    const jobsResult = await pool.query('SELECT id FROM jobs')
-    const jobIds = jobsResult.rows.map(r => r.id)
-    console.log(`Found ${jobIds.length} jobs to process`)
+    // Get jobs updated in the date range from ServiceTitan API
+    console.log(`Fetching jobs modified between ${fromDate} and ${toDate}`)
+    const jobsRes = await fetch(
+      `${process.env.ST_API_URL}/jpm/v2/tenant/${process.env.ST_TENANT_ID}/jobs?modifiedOnOrAfter=${fromDate}&modifiedOnOrBefore=${toDate}&pageSize=500`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'ST-App-Key': process.env.ST_APP_KEY,
+        }
+      }
+    )
+
+    if (!jobsRes.ok) {
+      throw new Error(`ServiceTitan API error: ${jobsRes.status}`)
+    }
+
+    const jobsData = await jobsRes.json()
+    const jobIds = (jobsData.data || []).map(j => j.id)
+    console.log(`Found ${jobIds.length} jobs modified in date range`)
 
     let dispatchesStored = 0
     let eventsFound = 0
@@ -313,7 +332,8 @@ app.post('/api/sync', async (req, res) => {
       dispatchesStored,
       eventsFound,
       jobsProcessed: jobIds.length,
-      apiErrors
+      apiErrors,
+      dateRange: { from: fromDate, to: toDate }
     })
   } catch (err) {
     console.error('Sync error:', err)
