@@ -103,8 +103,8 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' })
 })
 
-// Serve React app for all other routes
-app.get('*', (req, res) => {
+// Serve React app for all other routes (SPA fallback)
+app.use((req, res) => {
   res.sendFile(process.cwd() + '/dist/index.html')
 })
 
