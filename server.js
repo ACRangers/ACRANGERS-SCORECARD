@@ -144,68 +144,45 @@ const EMPLOYEE_MAP = {
   62870802: 'Kenia Simkins',
 }
 
-// GET /api/scorecard - Fetch from ServiceTitan API
+// GET /api/scorecard - Query database for scorecard
 app.get('/api/scorecard', async (req, res) => {
   try {
     const { from, to } = req.query
-    const token = await getServiceTitanToken()
 
     const fromDate = from || new Date(Date.now() - 7*24*60*60*1000).toISOString().split('T')[0]
-    const toDate = to || new Date().toISOString().split('T')[0]
+    const toDate = to ? (to.includes('T') ? to : `${to}T23:59:59.999Z`) : new Date().toISOString()
 
-    // Fetch jobs created in date range from ServiceTitan
-    const jobsRes = await fetch(
-      `${process.env.ST_API_URL}/jpm/v2/tenant/${process.env.ST_TENANT_ID}/jobs?createdOnOrAfter=${fromDate}&createdOnOrBefore=${toDate}&pageSize=500`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'ST-App-Key': process.env.ST_APP_KEY,
-        }
-      }
+    // Count jobs created by employee
+    const jobsResult = await pool.query(
+      `SELECT created_by_id, COUNT(*) as count
+       FROM jobs
+       WHERE created_by_id IS NOT NULL
+       AND created_at >= $1
+       AND created_at <= $2
+       GROUP BY created_by_id`,
+      [fromDate, toDate]
     )
 
-    if (!jobsRes.ok) throw new Error(`ServiceTitan API error: ${jobsRes.status}`)
-
-    const jobsData = await jobsRes.json()
-    const jobs = jobsData.data || []
-
     const jobsCreated = {}
+    jobsResult.rows.forEach(row => {
+      jobsCreated[row.created_by_id] = row.count
+    })
+
+    // Count dispatches by employee
+    const dispatchesResult = await pool.query(
+      `SELECT employee_id, COUNT(*) as count
+       FROM dispatches
+       WHERE employee_id IS NOT NULL
+       AND created_at >= $1
+       AND created_at <= $2
+       GROUP BY employee_id`,
+      [fromDate, toDate]
+    )
+
     const dispatchesMade = {}
-
-    // Process each job
-    for (const job of jobs) {
-      // Count job created by employee
-      if (job.createdById) {
-        jobsCreated[job.createdById] = (jobsCreated[job.createdById] || 0) + 1
-      }
-
-      // Get job history for technician assignments
-      try {
-        const historyRes = await fetch(
-          `${process.env.ST_API_URL}/jpm/v2/tenant/${process.env.ST_TENANT_ID}/jobs/${job.id}/history`,
-          {
-            headers: {
-              Authorization: `Bearer ${token}`,
-              'ST-App-Key': process.env.ST_APP_KEY,
-            }
-          }
-        )
-
-        if (historyRes.ok) {
-          const historyData = await historyRes.json()
-          const events = historyData.data || []
-
-          // Find Technician Assigned events
-          events.forEach(event => {
-            if (event.eventType === 'Technician Assigned' && event.employeeId) {
-              dispatchesMade[event.employeeId] = (dispatchesMade[event.employeeId] || 0) + 1
-            }
-          })
-        }
-      } catch (err) {
-        console.error(`Error fetching history for job ${job.id}:`, err.message)
-      }
-    }
+    dispatchesResult.rows.forEach(row => {
+      dispatchesMade[row.employee_id] = row.count
+    })
 
     // Combine and create scorecard
     const allEmployees = new Set([...Object.keys(jobsCreated), ...Object.keys(dispatchesMade)])
@@ -224,7 +201,6 @@ app.get('/api/scorecard', async (req, res) => {
       summary: {
         totalJobsCreated: Object.values(jobsCreated).reduce((a, b) => a + b, 0),
         totalDispatches: Object.values(dispatchesMade).reduce((a, b) => a + b, 0),
-        jobsProcessed: jobs.length,
       }
     })
   } catch (err) {
@@ -233,9 +209,20 @@ app.get('/api/scorecard', async (req, res) => {
   }
 })
 
-// POST /api/migrate - Create dispatches table
+// POST /api/migrate - Create jobs and dispatches tables
 app.post('/api/migrate', async (req, res) => {
   try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS jobs (
+        id INTEGER PRIMARY KEY,
+        job_number VARCHAR(50),
+        created_by_id INTEGER,
+        created_at TIMESTAMP,
+        customer_name VARCHAR(255),
+        status VARCHAR(50)
+      )
+    `)
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS dispatches (
         id SERIAL PRIMARY KEY,
@@ -246,73 +233,109 @@ app.post('/api/migrate', async (req, res) => {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `)
-    res.json({ status: 'success', message: 'dispatches table created' })
+
+    res.json({ status: 'success', message: 'jobs and dispatches tables created' })
   } catch (err) {
     console.error('Migration error:', err)
     res.status(500).json({ error: err.message })
   }
 })
 
-// POST /api/sync-dispatches - Fetch Job History API and store Technician Assigned events
-app.post('/api/sync-dispatches', async (req, res) => {
+// POST /api/sync - Sync jobs and dispatches from ServiceTitan to database
+app.post('/api/sync', async (req, res) => {
   try {
     const { from, to } = req.body
+    const token = await getServiceTitanToken()
 
-    // Get all unique job IDs from activity_log in date range
-    let query = 'SELECT DISTINCT job_id, job_number FROM activity_log WHERE job_id IS NOT NULL'
-    const params = []
-    let paramCount = 1
+    const fromDate = from || new Date(Date.now() - 7*24*60*60*1000).toISOString().split('T')[0]
+    const toDate = to || new Date().toISOString().split('T')[0]
 
-    if (from) {
-      query += ` AND occurred_at >= $${paramCount}`
-      params.push(new Date(from).toISOString())
-      paramCount++
-    }
+    // Fetch jobs from ServiceTitan
+    const jobsRes = await fetch(
+      `${process.env.ST_API_URL}/jpm/v2/tenant/${process.env.ST_TENANT_ID}/jobs?createdOnOrAfter=${fromDate}&createdOnOrBefore=${toDate}&pageSize=500`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'ST-App-Key': process.env.ST_APP_KEY,
+        }
+      }
+    )
 
-    if (to) {
-      query += ` AND occurred_at <= $${paramCount}`
-      params.push(to.includes('T') ? to : `${to}T23:59:59.999Z`)
-      paramCount++
-    }
+    if (!jobsRes.ok) throw new Error(`ServiceTitan API error: ${jobsRes.status}`)
 
-    const jobResult = await pool.query(query, params)
-    const jobs = jobResult.rows
+    const jobsData = await jobsRes.json()
+    const jobs = jobsData.data || []
 
-    let syncedCount = 0
-    let errorCount = 0
+    let jobsStored = 0
+    let dispatchesStored = 0
 
-    // Fetch Job History API for each job
+    // Store jobs in database
     for (const job of jobs) {
       try {
-        const historyRes = await fetch(`https://hvac-tracker-production.up.railway.app/api/debug/job-history?jobId=${job.job_id}`)
-        if (!historyRes.ok) continue
+        await pool.query(
+          `INSERT INTO jobs (id, job_number, created_by_id, created_at, customer_name, status)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (id) DO UPDATE SET
+             job_number = $2,
+             created_by_id = $3,
+             created_at = $4,
+             customer_name = $5,
+             status = $6`,
+          [
+            job.id,
+            job.number,
+            job.createdById,
+            job.createdOn,
+            job.customerName,
+            job.status
+          ]
+        )
+        jobsStored++
+      } catch (err) {
+        console.error(`Error storing job ${job.id}:`, err.message)
+      }
 
-        const events = await historyRes.json()
-        if (Array.isArray(events)) {
-          // Find "Technician Assigned" events
+      // Fetch and store dispatch events
+      try {
+        const historyRes = await fetch(
+          `${process.env.ST_API_URL}/jpm/v2/tenant/${process.env.ST_TENANT_ID}/jobs/${job.id}/history`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'ST-App-Key': process.env.ST_APP_KEY,
+            }
+          }
+        )
+
+        if (historyRes.ok) {
+          const historyData = await historyRes.json()
+          const events = historyData.data || []
+
           for (const event of events) {
             if (event.eventType === 'Technician Assigned' && event.employeeId) {
-              // Store in dispatches table
-              await pool.query(
-                `INSERT INTO dispatches (job_id, job_number, event_type, employee_id)
-                 VALUES ($1, $2, $3, $4)
-                 ON CONFLICT DO NOTHING`,
-                [job.job_id, job.job_number, event.eventType, event.employeeId]
-              )
-              syncedCount++
+              try {
+                await pool.query(
+                  `INSERT INTO dispatches (job_id, job_number, event_type, employee_id, created_at)
+                   VALUES ($1, $2, $3, $4, $5)
+                   ON CONFLICT DO NOTHING`,
+                  [job.id, job.number, event.eventType, event.employeeId, event.occurredOn]
+                )
+                dispatchesStored++
+              } catch (err) {
+                console.error(`Error storing dispatch for job ${job.id}:`, err.message)
+              }
             }
           }
         }
       } catch (err) {
-        console.error(`Error syncing job ${job.job_id}:`, err.message)
-        errorCount++
+        console.error(`Error fetching history for job ${job.id}:`, err.message)
       }
     }
 
     res.json({
       status: 'success',
-      message: `Synced ${syncedCount} dispatch events`,
-      errors: errorCount,
+      jobsStored,
+      dispatchesStored,
       jobsProcessed: jobs.length
     })
   } catch (err) {
